@@ -1,7 +1,7 @@
 package cn.daoge.parkour.storage;
 
 import cn.daoge.parkour.config.ParkourData;
-import com.google.gson.Gson;
+import com.google.gson.*;
 
 import java.io.FileNotFoundException;
 import java.io.FileReader;
@@ -11,7 +11,8 @@ import java.nio.file.Path;
 
 public class JSONParkourStorage implements IParkourStorage {
 
-    protected static Gson gson = new Gson();
+    protected Gson gson = new GsonBuilder()
+            .create();
     protected Path file;
 
     public JSONParkourStorage(Path file) {

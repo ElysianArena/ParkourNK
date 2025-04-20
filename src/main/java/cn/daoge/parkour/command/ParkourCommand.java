@@ -90,7 +90,8 @@ public class ParkourCommand extends Command {
                 if (args.length > 4) {
                     pos = new Vector3(Double.parseDouble(args[3]), Double.parseDouble(args[4]), Double.parseDouble(args[5]));
                 } else {
-                    pos = sender.getPosition().floor().add(0.5, 0, 0.5);
+                    Vector3 playerPos = sender.getPosition().floor();
+                    pos = new Vector3(playerPos.getX() + 0.5, playerPos.getY(), playerPos.getZ() + 0.5);
                 }
 
                 switch (args[1].toLowerCase()) {
