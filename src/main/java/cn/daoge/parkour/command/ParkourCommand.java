@@ -16,6 +16,24 @@ public class ParkourCommand extends Command {
     public ParkourCommand(String name) {
         super(name, "Parkour Plugin Main Command", "", new String[]{"pk"});
     }
+    private void sendHelp(CommandSender sender) {
+        StringBuilder helpMsg = new StringBuilder();
+        helpMsg.append("§b===== Parkour Command Help =====");
+        helpMsg.append("\n§a/pk help §7- Show this help message");
+        helpMsg.append("\n§a/pk see info <name> §7- View parkour info");
+        helpMsg.append("\n§a/pk send list §7- Show parkour list");
+         if (sender.isOp()) {
+            helpMsg.append("\n§6Admin Commands:");
+            helpMsg.append("\n§6/pk create <name> §7- Create new parkour");
+            helpMsg.append("\n§6/pk set start <name> [x y z] §7- Set start point");
+            helpMsg.append("\n§6/pk set end <name> [x y z] §7- Set end point");
+            helpMsg.append("\n§6/pk add point <name> [x y z] §7- Add checkpoint");
+            helpMsg.append("\n§6/pk add rank <name> [x y z] §7- Add leaderboard position");
+            helpMsg.append("\n§6/pk add tppos <name> [x y z] §7- Set teleport position");
+        }
+        helpMsg.append("\n§b================================");
+        sender.sendMessage(helpMsg.toString());
+    }
 
     @Override
     public boolean execute(CommandSender sender, String s, String[] args) {
@@ -68,6 +86,9 @@ public class ParkourCommand extends Command {
                 sender.sendMessage("[§bParkour§r] Successfully add parkour §a" + name);
                 break;
             case "set":
+            case "help":
+                sendHelp(sender);
+                break;
             case "add":
                 if (!sender.isOp()) {
                     sender.sendMessage("[§bParkour§r] You must be an operator to perform this command.");
@@ -126,7 +147,7 @@ public class ParkourCommand extends Command {
                 }
                 break;
             default:
-                sender.sendMessage(new TranslationContainer("commands.generic.usage", "\n" + this.getCommandFormatTips()));
+                sendHelp(sender);
                 break;
         }
         return true;
