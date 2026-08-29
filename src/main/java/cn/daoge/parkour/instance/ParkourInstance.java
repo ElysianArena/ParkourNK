@@ -3,10 +3,9 @@ package cn.daoge.parkour.instance;
 import cn.daoge.parkour.Parkour;
 import cn.daoge.parkour.config.LevelVector3;
 import cn.daoge.parkour.config.ParkourData;
+import cn.daoge.parkour.display.ArmorStandRanking;
+import cn.daoge.parkour.display.PointMarkerDisplay;
 import cn.daoge.parkour.storage.IParkourStorage;
-import cn.lanink.gamecore.ranking.Ranking;
-import cn.lanink.gamecore.ranking.RankingAPI;
-import cn.lanink.gamecore.ranking.RankingFormat;
 import cn.nukkit.Player;
 import cn.nukkit.Server;
 import cn.nukkit.entity.weather.EntityLightning;
@@ -21,7 +20,6 @@ import cn.nukkit.scheduler.PluginTask;
 import lombok.Getter;
 
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -31,7 +29,8 @@ public class ParkourInstance implements IParkourInstance {
     protected ParkourData data;
     protected IParkourStorage storage;
     protected Map<Player, PlayingData> playerMap = new HashMap<>();
-    protected Set<Ranking> rankings = new HashSet<>();
+    protected ArmorStandRanking rankingDisplay;
+    protected PointMarkerDisplay pointMarkerDisplay;
 
     public ParkourInstance(IParkourStorage storage) {
         this.storage = storage;
@@ -39,10 +38,22 @@ public class ParkourInstance implements IParkourInstance {
         if (this.data == null) {
             this.data = new ParkourData();
         }
-        if (!this.data.rankingTextPos.isEmpty()) {
-            this.data.rankingTextPos.forEach(vector3 -> createRankingText(Position.fromObject(vector3, getLevel(vector3.getLevelName()))));
+        if (this.data.routePoints == null) {
+            this.data.routePoints = new java.util.ArrayList<>();
         }
-        Server.getInstance().getScheduler().scheduleRepeatingTask(new RefreshTask(), 1);
+        if (this.data.ranking == null) {
+            this.data.ranking = new java.util.HashMap<>();
+        }
+        if (this.data.rankingTextPos == null) {
+            this.data.rankingTextPos = new java.util.ArrayList<>();
+        }
+        if (!this.data.rankingTextPos.isEmpty()) {
+            refreshRanking();
+        }
+        this.pointMarkerDisplay = new PointMarkerDisplay(Parkour.getInstance());
+        refreshPointMarkers();
+        Server.getInstance().getScheduler().scheduleRepeatingTask(new RefreshTask(), 2);
+        Server.getInstance().getScheduler().scheduleRepeatingTask(new RankingRefreshTask(), 200);
     }
 
     @Override
@@ -51,8 +62,11 @@ public class ParkourInstance implements IParkourInstance {
     }
 
     protected Level getLevel(String levelName) {
+        if (levelName == null || levelName.isBlank()) return null;
         Server server = Server.getInstance();
-        return Server.getInstance().isLevelLoaded(levelName) ? server.getLevelByName(levelName) : (server.loadLevel(levelName) ? server.getLevelByName(levelName) : null);
+        return server.isLevelLoaded(levelName)
+                ? server.getLevelByName(levelName)
+                : (server.loadLevel(levelName) ? server.getLevelByName(levelName) : null);
     }
 
     @Override
@@ -74,21 +88,24 @@ public class ParkourInstance implements IParkourInstance {
             player.teleport(Position.fromObject(this.data.start, getLevel()));
         setParkourItems(player);
         this.playerMap.put(player, new PlayingData());
-        player.sendMessage("[§bParkour§r] Successfully join parkour §a" + this.data.name);
+        Parkour.getInstance().getReplayManager().startRecording(player);
+        player.sendMessage(Parkour.getInstance().getLang().message("join", "room", this.data.name));
     }
 
     @Override
     public void tp(Player player) {
         player.teleport(Position.fromObject(this.data.tpPos, getLevel()));
-        player.sendMessage("[§bParkour§r] Teleport to parkour §a" + this.data.name);
+        player.sendMessage(Parkour.getInstance().getLang().message("teleport", "room", this.data.name));
     }
 
     @Override
     public void quit(Player player) {
-        player.teleport(this.data.tpPos);
+        player.teleport(Position.fromObject(this.data.tpPos, getLevel()));
         player.getInventory().clearAll();
         this.playerMap.remove(player);
-        player.sendMessage("[§bParkour§r] Successfully quit parkour §a" + this.data.name);
+        Parkour.getInstance().getReplayManager().stopRecording(player);
+        Parkour.getInstance().getParkourScoreboard().showLobby(player);
+        player.sendMessage(Parkour.getInstance().getLang().message("quit", "room", this.data.name));
     }
 
     @Override
@@ -99,14 +116,21 @@ public class ParkourInstance implements IParkourInstance {
     @Override
     public void pause(Player player, boolean pause) {
         PlayingData playingData = this.playerMap.get(player);
+        long now = System.nanoTime();
         playingData.paused = pause;
         if (pause) {
+            playingData.updateTime(now);
+            playingData.pausedAtNanos = now;
             playingData.pausedLoc = player.getLocation();
-            player.sendMessage("[§bParkour§r] Time paused");
+            player.sendMessage(Parkour.getInstance().getLang().message("pause"));
         } else {
+            if (playingData.pausedAtNanos > 0) {
+                playingData.pausedNanos += now - playingData.pausedAtNanos;
+                playingData.pausedAtNanos = 0;
+            }
             player.teleport(playingData.pausedLoc);
             playingData.pausedLoc = null;
-            player.sendMessage("[§bParkour§r] Time enabled");
+            player.sendMessage(Parkour.getInstance().getLang().message("resume"));
         }
     }
 
@@ -118,21 +142,26 @@ public class ParkourInstance implements IParkourInstance {
     @Override
     public void onReachPoint(Player player, Vector3 point) {
         this.playerMap.get(player).lastPoint = point;
-        player.sendMessage("[§bParkour§r] Point reached!");
+        this.playerMap.get(player).reachedPoints++;
+        player.sendMessage(Parkour.getInstance().getLang().message("checkpoint"));
         player.level.addSound(point, Sound.RANDOM_LEVELUP);
     }
 
     @Override
     public void onReachEnd(Player player) {
-        player.sendMessage("[§bParkour§r] Finished parkour §b" + this.data.name + "§r in §b" + String.format("%.3f", this.playerMap.get(player).timeUsed) + "s§r ! Congratulations!");
-        for (Player other : player.level.getPlayers().values())
-            other.sendMessage("[§bParkour§r] Player §b" + player.getName() + "§r Finished parkour §a" + this.data.name + "§r in §b" + String.format("%.3f", this.playerMap.get(player).timeUsed) + "s§r ! Congratulations!");
-        player.getInventory().clearAll();
         PlayingData playingData = this.playerMap.get(player);
-        if (!this.data.ranking.containsKey(player.getName()) || playingData.timeUsed < this.data.ranking.get(player.getName())) {
-            this.data.ranking.put(player.getName(), Double.parseDouble(String.format("%.3f", this.playerMap.get(player).timeUsed)));
-            updateAllRankingText();
-        }
+        playingData.updateTime(System.nanoTime());
+        String formattedTime = String.format("%.3f", playingData.timeUsed);
+        player.sendMessage(Parkour.getInstance().getLang().message("finish", "room", this.data.name, "time", formattedTime));
+        for (Player other : player.level.getPlayers().values())
+            if (other != player) other.sendMessage(Parkour.getInstance().getLang().message("finish_broadcast",
+                    "player", player.getName(), "room", this.data.name, "time", formattedTime));
+        player.getInventory().clearAll();
+        double time = Double.parseDouble(formattedTime);
+        Parkour.getInstance().getRepository().submit(this.data.name, player.getName(), time,
+                Parkour.getInstance().getReplayManager().stopRecording(player));
+        refreshRanking();
+        Parkour.getInstance().getParkourScoreboard().showLobby(player);
         spawnLightning(player);
         this.playerMap.remove(player);
     }
@@ -143,9 +172,22 @@ public class ParkourInstance implements IParkourInstance {
     }
 
     @Override
+    public double getTimeUsed(Player player) {
+        PlayingData playingData = playerMap.get(player);
+        return playingData == null ? 0 : playingData.timeUsed;
+    }
+
+    @Override
+    public int getReachedPoints(Player player) {
+        PlayingData playingData = playerMap.get(player);
+        return playingData == null ? 0 : playingData.reachedPoints;
+    }
+
+    @Override
     public void addRankingText(Position pos) {
         this.data.rankingTextPos.add(new LevelVector3(pos.getFloorX() + 0.5, pos.getFloorY() + 0.5, pos.getFloorZ() + 0.5, pos.level.getName()));
-        createRankingText(pos);
+        refreshRanking();
+        save();
     }
 
     @Override
@@ -159,19 +201,16 @@ public class ParkourInstance implements IParkourInstance {
         entity.spawnToAll();
     }
 
-    protected void createRankingText(Position pos) {
-        Ranking ranking = RankingAPI.createRanking(Parkour.getInstance(), this.data.name, pos);
-        HashMap<Integer, Integer> showLine = new HashMap();
-        showLine.put(20, 15);
-        RankingFormat format = new RankingFormat("§l§e--- §b%name% §e---", "§l[%player%]: §b%score%", "§l§e> §r§l[%player%]: §b%score% §e<", "", RankingFormat.SortOrder.DESCENDING, showLine);
-        ranking.setRankingFormat(format);
-        ranking.setRankingList(this.data.ranking);
-        this.rankings.add(ranking);
-        save();
+    protected void refreshRanking() {
+        if (rankingDisplay == null) {
+            rankingDisplay = new ArmorStandRanking(Parkour.getInstance(), this.data.name);
+        }
+        rankingDisplay.refresh(this.data.rankingTextPos);
     }
 
-    protected void updateAllRankingText() {
-        this.rankings.forEach(ranking -> ranking.setRankingList(this.data.ranking));
+    @Override
+    public void refreshRankingDisplay() {
+        refreshRanking();
     }
 
     protected void setParkourItems(Player player) {
@@ -185,10 +224,10 @@ public class ParkourInstance implements IParkourInstance {
         info.setItemLockMode(Item.ItemLockMode.LOCK_IN_SLOT);
         pause.setItemLockMode(Item.ItemLockMode.LOCK_IN_SLOT);
         escape.setItemLockMode(Item.ItemLockMode.LOCK_IN_SLOT);
-        back.setCustomName("§r§f§lLAST POINT");
-        info.setCustomName("§r§f§lPARKOUR INFO");
-        pause.setCustomName("§r§f§lPAUSE");
-        escape.setCustomName("§r§f§lESCAPE");
+        back.setCustomName(Parkour.getInstance().getLang().text("item_back"));
+        info.setCustomName(Parkour.getInstance().getLang().text("item_info"));
+        pause.setCustomName(Parkour.getInstance().getLang().text("item_pause"));
+        escape.setCustomName(Parkour.getInstance().getLang().text("item_escape"));
         inventory.setItem(1, back);
         inventory.setItem(3, info);
         inventory.setItem(5, pause);
@@ -200,12 +239,20 @@ public class ParkourInstance implements IParkourInstance {
         public boolean paused = false;
         public Vector3 lastPoint = getData().start;
         public Location pausedLoc;
-        public double timeUsed = 0;//second
+        public double timeUsed = 0;//second, millisecond precision
+        public final long startedAtNanos = System.nanoTime();
+        public long pausedAtNanos = 0;
+        public long pausedNanos = 0;
+        public int reachedPoints = 0;
+
+        public void updateTime(long now) {
+            long effectiveNanos = now - startedAtNanos - pausedNanos;
+            if (pausedAtNanos > 0) effectiveNanos -= now - pausedAtNanos;
+            timeUsed = Math.max(0, effectiveNanos / 1_000_000_000d);
+        }
     }
 
     public class RefreshTask extends PluginTask<Parkour> {
-
-        int lastTick = Server.getInstance().getTick();
 
         public RefreshTask() {
             super(Parkour.getInstance());
@@ -213,14 +260,37 @@ public class ParkourInstance implements IParkourInstance {
 
         @Override
         public void onRun(int i) {
-            int currentTick = Server.getInstance().getTick();
-            double timePassed = 0.05d * (currentTick - lastTick);
+            long now = System.nanoTime();
             playerMap.forEach((player, playingData) -> {
-                if (!playingData.paused) playingData.timeUsed += timePassed;
+                playingData.updateTime(now);
+                Parkour.getInstance().getParkourScoreboard().update(player, ParkourInstance.this,
+                        playingData.timeUsed, playingData.reachedPoints);
                 player.sendActionBar((playingData.paused ? "§e----Pausing----\n§r" : "") +
                         "Time Used: §a" + String.format("%.3f", playingData.timeUsed), 0, 1, 0);
             });
-            lastTick = currentTick;
         }
+    }
+
+    public class RankingRefreshTask extends PluginTask<Parkour> {
+        public RankingRefreshTask() {
+            super(Parkour.getInstance());
+        }
+
+        @Override
+        public void onRun(int currentTick) {
+            refreshRanking();
+        }
+    }
+
+    @Override
+    public void refreshPointMarkers() {
+        if (pointMarkerDisplay == null) return;
+        pointMarkerDisplay.refresh(data, getLevel());
+    }
+
+    @Override
+    public void close() {
+        if (rankingDisplay != null) rankingDisplay.close();
+        if (pointMarkerDisplay != null) pointMarkerDisplay.close();
     }
 }

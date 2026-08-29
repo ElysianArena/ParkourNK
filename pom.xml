@@ -16,9 +16,15 @@
 
     <dependencies>
         <dependency>
-            <groupId>cn.lanink</groupId>
-            <artifactId>MemoriesOfTime-GameCore</artifactId>
-            <version>1.6.2</version>
+            <groupId>cn.ElysianArena</groupId>
+            <artifactId>ElyDataCore</artifactId>
+            <version>1.0.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>net.easecation</groupId>
+            <artifactId>Ghosty</artifactId>
+            <version>B20240115-MOT-C1</version>
             <scope>provided</scope>
         </dependency>
         <dependency>

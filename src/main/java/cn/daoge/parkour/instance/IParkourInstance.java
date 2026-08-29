@@ -35,7 +35,17 @@ public interface IParkourInstance {
 
     Vector3 getLastPoint(Player player);
 
+    double getTimeUsed(Player player);
+
+    int getReachedPoints(Player player);
+
     void addRankingText(Position pos);
 
+    void refreshPointMarkers();
+
+    void refreshRankingDisplay();
+
     Set<Player> getPlayers();
+
+    void close();
 }

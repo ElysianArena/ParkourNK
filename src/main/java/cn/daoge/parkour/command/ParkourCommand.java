@@ -22,6 +22,8 @@ public class ParkourCommand extends Command {
         helpMsg.append("\n§a/pk help §7- Show this help message");
         helpMsg.append("\n§a/pk see info <name> §7- View parkour info");
         helpMsg.append("\n§a/pk send list §7- Show parkour list");
+        helpMsg.append("\n§a/pk replay [name] §7- Select a room and view replays");
+        helpMsg.append("\n§a/pk quit §7- Exit parkour or replay");
          if (sender.isOp()) {
             helpMsg.append("\n§6Admin Commands:");
             helpMsg.append("\n§6/pk create <name> §7- Create new parkour");
@@ -30,6 +32,7 @@ public class ParkourCommand extends Command {
             helpMsg.append("\n§6/pk add point <name> [x y z] §7- Add checkpoint");
             helpMsg.append("\n§6/pk add rank <name> [x y z] §7- Add leaderboard position");
             helpMsg.append("\n§6/pk add tppos <name> [x y z] §7- Set teleport position");
+            helpMsg.append("\n§6/pk delete <player> §7- Delete player scores and replays");
         }
         helpMsg.append("\n§b================================");
         sender.sendMessage(helpMsg.toString());
@@ -48,12 +51,60 @@ public class ParkourCommand extends Command {
         String name;
         IParkourInstance instance;
         switch (args[0].toLowerCase()) {
+            case "replay":
+                if (args.length < 2) {
+                    plugin.getReplayManager().openRoomList(sender.asPlayer());
+                    return true;
+                }
+                instance = plugin.getParkourInstanceMap().get(args[1]);
+                if (instance == null) {
+                    sender.sendMessage(plugin.getLang().message("room_not_found", "room", args[1]));
+                    return true;
+                }
+                plugin.getReplayManager().openReplayList(sender.asPlayer(), instance);
+                break;
+            case "delete":
+                if (!sender.isOp()) {
+                    sender.sendMessage(plugin.getLang().message("no_permission"));
+                    return true;
+                }
+                if (args.length < 2) return false;
+                int deletedRooms = 0;
+                if (args.length >= 3) {
+                    IParkourInstance room = plugin.getParkourInstanceMap().get(args[2]);
+                    if (room == null) {
+                        sender.sendMessage(plugin.getLang().message("room_not_found", "room", args[2]));
+                        return true;
+                    }
+                    if (plugin.getRepository().deletePlayer(room.getData().name, args[1])) {
+                        room.refreshRankingDisplay();
+                        deletedRooms = 1;
+                    }
+                } else {
+                    for (IParkourInstance room : plugin.getParkourInstanceMap().values()) {
+                        if (plugin.getRepository().deletePlayer(room.getData().name, args[1])) {
+                            room.refreshRankingDisplay();
+                            deletedRooms++;
+                        }
+                    }
+                }
+                sender.sendMessage(plugin.getLang().message(deletedRooms == 0 ? "delete_not_found" : "delete_success",
+                        "player", args[1], "count", deletedRooms));
+                break;
+            case "quit":
+                if (plugin.getReplayManager().isReplaying(sender.asPlayer())) {
+                    plugin.getReplayManager().stopReplay(sender.asPlayer(), false);
+                } else {
+                    plugin.quitFromParkour(sender.asPlayer());
+                }
+                break;
             case "see":
                 if (args.length < 2 || !args[1].equals("info")) {
                     return false;
                 }
                 if (args.length < 3) {
-                    return false;
+                    plugin.sendParkourInfoRoomList(sender.asPlayer());
+                    return true;
                 }
                 name = args[2];
                 instance = plugin.getParkourInstanceMap().get(name);
@@ -83,6 +134,7 @@ public class ParkourCommand extends Command {
                 instance.getData().levelName = sender.getPosition().level.getName();
                 plugin.addParkourInstance(instance);
                 instance.save();
+                instance.refreshPointMarkers();
                 sender.sendMessage("[§bParkour§r] Successfully add parkour §a" + name);
                 break;
             case "set":
@@ -119,16 +171,19 @@ public class ParkourCommand extends Command {
                     case "start":
                         instance.getData().start = pos;
                         instance.save();
+                        instance.refreshPointMarkers();
                         sender.sendMessage("[§bParkour§r] Successfully set start of parkour §a" + name);
                         break;
                     case "end":
                         instance.getData().end = pos;
                         instance.save();
+                        instance.refreshPointMarkers();
                         sender.sendMessage("[§bParkour§r] Successfully set end of parkour §a" + name);
                         break;
                     case "point":
                         instance.getData().routePoints.add(pos);
                         instance.save();
+                        instance.refreshPointMarkers();
                         sender.sendMessage("[§bParkour§r] Successfully add point to parkour §a" + name);
                         break;
                     case "rank":

@@ -2,14 +2,21 @@ package cn.daoge.parkour;
 
 import cn.daoge.parkour.command.ParkourCommand;
 import cn.daoge.parkour.config.ParkourData;
+import cn.daoge.parkour.config.Lang;
+import cn.daoge.parkour.display.ParkourScoreboard;
+import cn.daoge.parkour.display.PacketArmorStand;
 import cn.daoge.parkour.instance.IParkourInstance;
 import cn.daoge.parkour.instance.ParkourInstance;
 import cn.daoge.parkour.storage.JSONParkourStorage;
+import cn.daoge.parkour.storage.ElyParkourRepository;
+import cn.daoge.parkour.replay.ReplayManager;
 import cn.nukkit.Player;
 import cn.nukkit.Server;
 import cn.nukkit.event.EventHandler;
 import cn.nukkit.event.Listener;
+import cn.nukkit.event.entity.EntityDamageEvent;
 import cn.nukkit.event.player.PlayerInteractEvent;
+import cn.nukkit.event.player.PlayerJoinEvent;
 import cn.nukkit.event.player.PlayerMoveEvent;
 import cn.nukkit.event.player.PlayerQuitEvent;
 import cn.nukkit.event.player.PlayerRespawnEvent;
@@ -21,6 +28,7 @@ import cn.nukkit.level.Location;
 import cn.nukkit.level.Position;
 import cn.nukkit.math.Vector3;
 import cn.nukkit.plugin.PluginBase;
+import cn.nukkit.utils.Config;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -46,6 +54,11 @@ public class Parkour extends PluginBase implements Listener {
     protected Map<String, IParkourInstance> parkourInstanceMap = new HashMap<>();
     protected Map<Player, IParkourInstance> currentPlayingParkour = new HashMap<>();
     protected Path dataPath;
+    protected Config scoreboardConfig;
+    protected Lang lang;
+    protected ElyParkourRepository repository;
+    protected ReplayManager replayManager;
+    protected ParkourScoreboard parkourScoreboard;
 
     {
         instance = this;
@@ -53,6 +66,14 @@ public class Parkour extends PluginBase implements Listener {
 
     @Override
     public void onEnable() {
+        saveResource("scoreboard.yml");
+        saveResource("lang.yml");
+        this.scoreboardConfig = new Config(getDataFolder() + "/scoreboard.yml", Config.YAML);
+        this.lang = new Lang(new Config(getDataFolder() + "/lang.yml", Config.YAML));
+        this.repository = new ElyParkourRepository();
+        this.replayManager = new ReplayManager(this);
+        this.parkourScoreboard = new ParkourScoreboard(scoreboardConfig);
+        PacketArmorStand.initialize(this);
         this.dataPath = this.getDataFolder().toPath().resolve("instances");
         if (!Files.exists(this.dataPath)) {
             try {
@@ -64,18 +85,24 @@ public class Parkour extends PluginBase implements Listener {
         loadParkourInstance();
         Server.getInstance().getCommandMap().register("", new ParkourCommand("parkour"));
         Server.getInstance().getPluginManager().registerEvents(this, this);
+        Server.getInstance().getOnlinePlayers().values().forEach(parkourScoreboard::showLobby);
+        Server.getInstance().getScheduler().scheduleRepeatingTask(this, parkourScoreboard::refreshLobby, 20);
     }
 
     @Override
     public void onDisable() {
         for (IParkourInstance value : this.parkourInstanceMap.values()) {
             value.save();
+            value.close();
         }
+        replayManager.shutdown();
+        PacketArmorStand.shutdown();
     }
 
     public void joinTo(Player player, IParkourInstance instance) {
         if (!instance.isComplete()) {
-            player.sendMessage("[§bParkour§r] §cUncompleted parkour instance, please complete it before playing!");
+            player.sendMessage(lang.message("room_incomplete", "room", instance.getData().name));
+            return;
         }
         this.currentPlayingParkour.put(player, instance);
         instance.join(player);
@@ -94,9 +121,30 @@ public class Parkour extends PluginBase implements Listener {
     public void sendParkourInfo(Player player, IParkourInstance instance) {
         ParkourData data = instance.getData();
         StringBuilder builder = new StringBuilder();
-        builder.append("§l§fRanking: \n");
-        data.ranking.forEach((name, score) -> builder.append("§l[").append(name).append("]: §b").append(score).append("§f\n"));
-        FormWindowSimple form = new FormWindowSimple("§l§b Info | §f§l" + data.name, builder.toString());
+        builder.append(lang.text("form_ranking"));
+        repository.getRanking(data.name).forEach(entry -> builder.append("§l[")
+                .append(entry.getKey()).append("]: §b").append(entry.getValue()).append("s§f\n"));
+        FormWindowSimple form = new FormWindowSimple(lang.text("form_info_title", "room", data.name), builder.toString());
+        player.showFormWindow(form);
+    }
+
+    public void sendParkourInfoRoomList(Player player) {
+        List<IParkourInstance> rooms = this.parkourInstanceMap.values().stream()
+                .filter(IParkourInstance::isComplete)
+                .sorted((first, second) -> first.getData().name.compareToIgnoreCase(second.getData().name))
+                .toList();
+        if (rooms.isEmpty()) {
+            player.sendMessage(lang.message("room_list_empty"));
+            return;
+        }
+        List<ElementButton> buttons = rooms.stream()
+                .map(instance -> new ElementButton("§f" + instance.getData().name))
+                .toList();
+        FormWindowSimple form = new FormWindowSimple(lang.text("info_room_title"), "", buttons);
+        form.addHandler((viewer, id) -> {
+            if (form.getResponse() == null) return;
+            sendParkourInfo(viewer, rooms.get(form.getResponse().getClickedButtonId()));
+        });
         player.showFormWindow(form);
     }
 
@@ -106,7 +154,7 @@ public class Parkour extends PluginBase implements Listener {
                 .filter(IParkourInstance::isComplete)
                 .map(this::generateListButton)
                 .toList();
-        FormWindowSimple form = new FormWindowSimple("§f§lParkour", "", buttons);
+        FormWindowSimple form = new FormWindowSimple(lang.text("form_list_title"), "", buttons);
         form.addHandler((player1, i) -> {
             if (form.getResponse() == null) return;
             ParkourElementButton clickedButton = (ParkourElementButton) form.getResponse().getClickedButton();
@@ -182,6 +230,11 @@ public class Parkour extends PluginBase implements Listener {
         if (event.getAction() != PlayerInteractEvent.Action.RIGHT_CLICK_AIR
                 && event.getAction() != PlayerInteractEvent.Action.RIGHT_CLICK_BLOCK) return;
         Player player = event.getPlayer();
+        if (replayManager.isReplaying(player)) {
+            replayManager.control(player, player.getInventory().getItemInHand().getId());
+            event.setCancelled();
+            return;
+        }
         IParkourInstance currentPlaying = currentPlayingParkour.get(player);
         if (currentPlaying == null) return;
         switch (player.getInventory().getItemInHand().getId()) {
@@ -196,8 +249,23 @@ public class Parkour extends PluginBase implements Listener {
     }
 
     @EventHandler
+    protected void onPlayerDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Player player)) return;
+        if (currentPlayingParkour.containsKey(player) || replayManager.isReplaying(player)) {
+            event.setCancelled();
+        }
+    }
+
+    @EventHandler
+    protected void onPlayerJoin(PlayerJoinEvent event) {
+        parkourScoreboard.showLobby(event.getPlayer());
+    }
+
+    @EventHandler
     protected void onPlayerQuit(PlayerQuitEvent event) {
         quitFromParkour(event.getPlayer());
+        replayManager.stopReplay(event.getPlayer(), false);
+        parkourScoreboard.hide(event.getPlayer());
     }
 
     @EventHandler

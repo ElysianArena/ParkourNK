@@ -1,0 +1,27 @@
+title: "§b§lParkour"
+lobby-lines:
+  - "§f欢迎来到跑酷服务器"
+  - "§7日期: {year}-{month}-{day}"
+  - "§7在线: {online} 进行中: {playing}"
+  - ""
+  - "§7使用 /pk send list"
+lines:
+  - "§7Room: {room}"
+  - "§f玩家: {player}"
+  - "§fTime: §a{time}s"
+  - "§fPoint: §e{point}/{total}"
+  - "§fBest: §a{best}s  §fRank: §e#{rank}"
+  - "§7日期: {year}-{month}-{day}"
+  - "§7Replay: {replay}  Pause: {pause}"
+  - ""
+  - "§7play.parkour"
+ranking:
+  title: "§b§l{room} 速度榜 Top 15"
+  line: "§e#{rank} §f{player} §a{time}s"
+  line-spacing: 0.28
+point-markers:
+  enabled: true
+  height-offset: 1.5
+  start: "§a§l开始点"
+  checkpoint: "§e§l检查点 {index}"
+  end: "§c§l结束点"
